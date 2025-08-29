@@ -6,6 +6,13 @@ using System.Threading;
 
 namespace SMPPTester
 {
+    public enum BindMode
+    {
+        Transmitter,
+        Receiver,
+        Transceiver
+    }
+
     public class SMPPClient
     {
         private TcpClient tcpClient;
@@ -16,8 +23,13 @@ namespace SMPPTester
         private string password;
         private bool isConnected = false;
         private int sequenceNumber = 1;
+        private BindMode bindMode;
 
         // SMPP Command IDs
+        private const uint BIND_TRANSMITTER = 0x00000001;
+        private const uint BIND_TRANSMITTER_RESP = 0x80000001;
+        private const uint BIND_RECEIVER = 0x00000002;
+        private const uint BIND_RECEIVER_RESP = 0x80000002;
         private const uint BIND_TRANSCEIVER = 0x00000009;
         private const uint BIND_TRANSCEIVER_RESP = 0x80000009;
         private const uint UNBIND = 0x00000006;
@@ -28,12 +40,13 @@ namespace SMPPTester
         // SMPP Status codes
         private const uint ESME_ROK = 0x00000000;
 
-        public SMPPClient(string host, int port, string systemId, string password)
+        public SMPPClient(string host, int port, string systemId, string password, BindMode bindMode = BindMode.Transceiver)
         {
             this.host = host;
             this.port = port;
             this.systemId = systemId;
             this.password = password;
+            this.bindMode = bindMode;
         }
 
         public bool Connect(int timeoutMs = 30000)
@@ -58,10 +71,10 @@ namespace SMPPTester
                 tcpClient.EndConnect(result);
                 stream = tcpClient.GetStream();
                 
-                Console.WriteLine("TCP connection established. Attempting SMPP bind...");
+                Console.WriteLine($"TCP connection established. Attempting SMPP bind ({bindMode})...");
                 
-                // Send bind_transceiver PDU
-                bool bindResult = SendBindTransceiver();
+                // Send bind PDU based on mode
+                bool bindResult = SendBind();
                 if (bindResult)
                 {
                     isConnected = true;
@@ -82,16 +95,19 @@ namespace SMPPTester
             }
         }
 
-        private bool SendBindTransceiver()
+        private bool SendBind()
         {
             try
             {
-                // Create bind_transceiver PDU
-                var pdu = CreateBindTransceiverPDU();
+                // Create bind PDU based on mode
+                var pdu = CreateBindPDU();
                 
                 // Send PDU
                 stream.Write(pdu, 0, pdu.Length);
-                Console.WriteLine("Bind transceiver PDU sent");
+                Console.WriteLine($"Bind {bindMode} PDU sent (Length: {pdu.Length} bytes)");
+                
+                // Add debug output
+                Console.WriteLine($"PDU Hex: {BitConverter.ToString(pdu).Replace("-", " ")}");
                 
                 // Read response
                 byte[] response = ReadPDU();
@@ -109,58 +125,66 @@ namespace SMPPTester
             }
         }
 
-        private byte[] CreateBindTransceiverPDU()
+        private byte[] CreateBindPDU()
         {
+            // Get command ID based on bind mode
+            uint commandId;
+            switch (bindMode)
+            {
+                case BindMode.Transmitter:
+                    commandId = BIND_TRANSMITTER;
+                    break;
+                case BindMode.Receiver:
+                    commandId = BIND_RECEIVER;
+                    break;
+                case BindMode.Transceiver:
+                    commandId = BIND_TRANSCEIVER;
+                    break;
+                default:
+                    commandId = BIND_TRANSCEIVER;
+                    break;
+            }
+
             var bodyStream = new MemoryStream();
-            var writer = new BinaryWriter(bodyStream);
             
-            // System_id (max 16 bytes, null-terminated)
-            byte[] systemIdBytes = new byte[16];
-            byte[] systemIdData = Encoding.ASCII.GetBytes(systemId);
-            Array.Copy(systemIdData, systemIdBytes, Math.Min(systemIdData.Length, 15));
-            writer.Write(systemIdBytes);
+            // System_id (null-terminated string, max 16 bytes including null)
+            WriteNullTerminatedString(bodyStream, systemId, 16);
             
-            // Password (max 9 bytes, null-terminated)
-            byte[] passwordBytes = new byte[9];
-            byte[] passwordData = Encoding.ASCII.GetBytes(password);
-            Array.Copy(passwordData, passwordBytes, Math.Min(passwordData.Length, 8));
-            writer.Write(passwordBytes);
+            // Password (null-terminated string, max 9 bytes including null)  
+            WriteNullTerminatedString(bodyStream, password, 9);
             
-            // System_type (max 13 bytes, null-terminated)
-            byte[] systemTypeBytes = new byte[13];
-            writer.Write(systemTypeBytes);
+            // System_type (null-terminated string, max 13 bytes including null)
+            WriteNullTerminatedString(bodyStream, "", 13); // Empty system type
             
-            // Interface_version
-            writer.Write((byte)0x34); // SMPP version 3.4
+            // Interface_version (1 byte)
+            bodyStream.WriteByte(0x34); // SMPP version 3.4
             
-            // Addr_ton
-            writer.Write((byte)0x00);
+            // Addr_ton (1 byte)
+            bodyStream.WriteByte(0x00);
             
-            // Addr_npi
-            writer.Write((byte)0x00);
+            // Addr_npi (1 byte) 
+            bodyStream.WriteByte(0x00);
             
-            // Address_range (max 41 bytes, null-terminated)
-            byte[] addressRangeBytes = new byte[41];
-            writer.Write(addressRangeBytes);
+            // Address_range (null-terminated string, max 41 bytes including null)
+            WriteNullTerminatedString(bodyStream, "", 41); // Empty address range
             
             byte[] body = bodyStream.ToArray();
             
             // Create header
             var headerStream = new MemoryStream();
-            var headerWriter = new BinaryWriter(headerStream);
             
             // Command_length (4 bytes)
             uint commandLength = (uint)(16 + body.Length); // Header is 16 bytes
-            headerWriter.Write(ReverseBytes(BitConverter.GetBytes(commandLength)));
+            WriteUint32BigEndian(headerStream, commandLength);
             
             // Command_id (4 bytes)
-            headerWriter.Write(ReverseBytes(BitConverter.GetBytes(BIND_TRANSCEIVER)));
+            WriteUint32BigEndian(headerStream, commandId);
             
             // Command_status (4 bytes)
-            headerWriter.Write(ReverseBytes(BitConverter.GetBytes((uint)0)));
+            WriteUint32BigEndian(headerStream, 0);
             
             // Sequence_number (4 bytes)
-            headerWriter.Write(ReverseBytes(BitConverter.GetBytes((uint)sequenceNumber++)));
+            WriteUint32BigEndian(headerStream, (uint)sequenceNumber++);
             
             byte[] header = headerStream.ToArray();
             
@@ -169,7 +193,44 @@ namespace SMPPTester
             Array.Copy(header, 0, pdu, 0, header.Length);
             Array.Copy(body, 0, pdu, header.Length, body.Length);
             
+            Console.WriteLine($"Created bind PDU: Command=0x{commandId:X8}, Length={commandLength}, SeqNum={sequenceNumber-1}");
+            Console.WriteLine($"SystemId='{systemId}', Password='{new string('*', password.Length)}'");
+            
             return pdu;
+        }
+
+        private void WriteNullTerminatedString(MemoryStream stream, string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                // Write null bytes to fill the field
+                for (int i = 0; i < maxLength; i++)
+                {
+                    stream.WriteByte(0);
+                }
+            }
+            else
+            {
+                byte[] bytes = Encoding.ASCII.GetBytes(value);
+                int bytesToWrite = Math.Min(bytes.Length, maxLength - 1); // Reserve space for null terminator
+                
+                // Write the string bytes
+                stream.Write(bytes, 0, bytesToWrite);
+                
+                // Fill remaining space with null bytes
+                for (int i = bytesToWrite; i < maxLength; i++)
+                {
+                    stream.WriteByte(0);
+                }
+            }
+        }
+
+        private void WriteUint32BigEndian(MemoryStream stream, uint value)
+        {
+            stream.WriteByte((byte)((value >> 24) & 0xFF));
+            stream.WriteByte((byte)((value >> 16) & 0xFF));
+            stream.WriteByte((byte)((value >> 8) & 0xFF));
+            stream.WriteByte((byte)(value & 0xFF));
         }
 
         private byte[] ReadPDU()
@@ -246,22 +307,37 @@ namespace SMPPTester
                 
                 Console.WriteLine($"Received PDU - Command ID: 0x{commandId:X8}, Status: 0x{commandStatus:X8}");
                 
-                if (commandId == BIND_TRANSCEIVER_RESP)
+                // Check if this is the expected bind response
+                bool isExpectedResponse = false;
+                switch (bindMode)
+                {
+                    case BindMode.Transmitter:
+                        isExpectedResponse = (commandId == BIND_TRANSMITTER_RESP);
+                        break;
+                    case BindMode.Receiver:
+                        isExpectedResponse = (commandId == BIND_RECEIVER_RESP);
+                        break;
+                    case BindMode.Transceiver:
+                        isExpectedResponse = (commandId == BIND_TRANSCEIVER_RESP);
+                        break;
+                }
+                
+                if (isExpectedResponse)
                 {
                     if (commandStatus == ESME_ROK)
                     {
-                        Console.WriteLine("Bind successful!");
+                        Console.WriteLine($"Bind {bindMode} successful!");
                         return true;
                     }
                     else
                     {
-                        Console.WriteLine($"Bind failed with status: 0x{commandStatus:X8} ({GetStatusDescription(commandStatus)})");
+                        Console.WriteLine($"Bind {bindMode} failed with status: 0x{commandStatus:X8} ({GetStatusDescription(commandStatus)})");
                         return false;
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"Unexpected response command ID: 0x{commandId:X8}");
+                    Console.WriteLine($"Unexpected response command ID: 0x{commandId:X8} (expected bind {bindMode} response)");
                     return false;
                 }
             }

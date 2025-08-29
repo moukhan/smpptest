@@ -17,6 +17,8 @@ namespace SMPPTester
             string username = null;
             string password = null;
             int timeout = 30000; // Default 30 seconds
+            BindMode bindMode = BindMode.Transceiver; // Default bind mode
+            bool debug = false;
 
             try
             {
@@ -104,6 +106,42 @@ namespace SMPPTester
                             }
                             break;
 
+                        case "-m":
+                        case "--mode":
+                            if (i + 1 < args.Length)
+                            {
+                                string modeStr = args[++i].ToLower();
+                                switch (modeStr)
+                                {
+                                    case "transmitter":
+                                    case "tx":
+                                        bindMode = BindMode.Transmitter;
+                                        break;
+                                    case "receiver":
+                                    case "rx":
+                                        bindMode = BindMode.Receiver;
+                                        break;
+                                    case "transceiver":
+                                    case "trx":
+                                        bindMode = BindMode.Transceiver;
+                                        break;
+                                    default:
+                                        Console.WriteLine($"Error: Invalid bind mode '{args[i]}'. Use: transmitter, receiver, or transceiver");
+                                        return;
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("Error: Mode parameter requires a value");
+                                return;
+                            }
+                            break;
+
+                        case "-d":
+                        case "--debug":
+                            debug = true;
+                            break;
+
                         case "--help":
                             ShowUsage();
                             return;
@@ -150,11 +188,13 @@ namespace SMPPTester
                 Console.WriteLine($"  Port: {port}");
                 Console.WriteLine($"  Username: {username}");
                 Console.WriteLine($"  Password: {new string('*', password.Length)}");
+                Console.WriteLine($"  Bind Mode: {bindMode}");
                 Console.WriteLine($"  Timeout: {timeout} ms");
+                Console.WriteLine($"  Debug: {debug}");
                 Console.WriteLine();
 
                 // Test SMPP connectivity
-                TestSMPPConnection(host, port, username, password, timeout);
+                TestSMPPConnection(host, port, username, password, timeout, bindMode, debug);
             }
             catch (Exception ex)
             {
@@ -167,7 +207,7 @@ namespace SMPPTester
             Console.ReadKey();
         }
 
-        static void TestSMPPConnection(string host, int port, string username, string password, int timeout)
+        static void TestSMPPConnection(string host, int port, string username, string password, int timeout, BindMode bindMode, bool debug)
         {
             SMPPClient client = null;
             
@@ -177,7 +217,7 @@ namespace SMPPTester
                 Console.WriteLine();
 
                 // Create SMPP client
-                client = new SMPPClient(host, port, username, password);
+                client = new SMPPClient(host, port, username, password, bindMode);
 
                 // Test connection
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Starting connection test...");
@@ -280,18 +320,26 @@ namespace SMPPTester
             Console.WriteLine("  -w, --password  SMPP password");
             Console.WriteLine();
             Console.WriteLine("Optional Parameters:");
+            Console.WriteLine("  -m, --mode      Bind mode: transmitter, receiver, or transceiver (default: transceiver)");
             Console.WriteLine("  -t, --timeout   Connection timeout in milliseconds (default: 30000)");
+            Console.WriteLine("  -d, --debug     Enable debug output");
             Console.WriteLine("      --help      Show this help message");
             Console.WriteLine();
             Console.WriteLine("Examples:");
             Console.WriteLine("  SMPPTester.exe -h 192.168.1.100 -p 2775 -u testuser -w testpass");
-            Console.WriteLine("  SMPPTester.exe --host smpp.example.com --port 2775 --username myuser --password mypass --timeout 60000");
+            Console.WriteLine("  SMPPTester.exe -h 172.16.11.71 -p 10000 -u username -w password -m transmitter -d");
+            Console.WriteLine("  SMPPTester.exe --host smpp.example.com --port 2775 --username myuser --password mypass --mode receiver --timeout 60000");
             Console.WriteLine();
             Console.WriteLine("This tool will:");
             Console.WriteLine("1. Establish a TCP connection to the SMPP server");
-            Console.WriteLine("2. Send a bind_transceiver PDU with your credentials");
+            Console.WriteLine("2. Send a bind PDU (transmitter/receiver/transceiver) with your credentials");
             Console.WriteLine("3. Test the connection with an enquire_link PDU");
             Console.WriteLine("4. Report the results and disconnect cleanly");
+            Console.WriteLine();
+            Console.WriteLine("Bind Modes:");
+            Console.WriteLine("  transmitter  - Can send SMS messages");
+            Console.WriteLine("  receiver     - Can receive SMS messages");
+            Console.WriteLine("  transceiver  - Can both send and receive SMS messages (default)");
         }
     }
 }
